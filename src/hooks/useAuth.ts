@@ -9,7 +9,13 @@ type Profile = {
     full_name: string | null;
     email: string | null;
     role: 'candidate' | 'recruiter' | null;
+
     phone: string | null;
+    country_code: string | null;
+    address: string | null;
+    state: string | null;
+    country: string | null;
+
     location: string | null;
     headline: string | null;
     bio: string | null;
