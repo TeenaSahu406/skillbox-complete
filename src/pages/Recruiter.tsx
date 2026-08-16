@@ -9,6 +9,19 @@ type Skill = {
   name: string;
 };
 
+type RecruiterJob = {
+  id: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  job_mode: string | null;
+  employment_type: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
 export function Company() {
   const { user } = useAuth();
 
@@ -226,6 +239,11 @@ export function PostJob() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loadingSkills, setLoadingSkills] = useState(true);
 
+  const [skillInput, setSkillInput] = useState('');
+
+  const [jobs, setJobs] = useState<RecruiterJob[]>([]);
+  const [loadingJobs, setLoadingJobs] = useState(true);
+
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -260,6 +278,16 @@ export function PostJob() {
     loadSkills();
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      setJobs([]);
+      setLoadingJobs(false);
+      return;
+    }
+
+    loadJobs();
+  }, [user]);
+
   function updateField(
     field: keyof typeof form,
     value: string
@@ -278,6 +306,234 @@ export function PostJob() {
     );
   }
 
+  async function createOrFindSkill(
+    name: string
+  ): Promise<string | null> {
+    const cleanName = name.trim();
+
+    if (!cleanName) return null;
+
+    const existing = skills.find(
+      (skill) =>
+        skill.name.trim().toLowerCase() ===
+        cleanName.toLowerCase()
+    );
+
+    if (existing) {
+      return existing.id;
+    }
+
+    const { data, error: insertError } = await supabase
+      .from('skills')
+      .insert({
+        name: cleanName,
+      })
+      .select('id,name')
+      .single();
+
+    if (insertError) {
+      setError(
+        `Could not add skill "${cleanName}": ${insertError.message}`
+      );
+      return null;
+    }
+
+    if (!data) {
+      setError(
+        `Could not create skill "${cleanName}".`
+      );
+      return null;
+    }
+
+    const newSkill = data as Skill;
+
+    setSkills((current) => {
+      const exists = current.some(
+        (skill) => skill.id === newSkill.id
+      );
+
+      if (exists) return current;
+
+      return [...current, newSkill].sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+    });
+
+    return newSkill.id;
+  }
+
+  async function addTypedSkills() {
+    const names = skillInput
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    if (!names.length) return;
+
+    setError('');
+
+    const ids: string[] = [];
+
+    for (const name of names) {
+      const skillId = await createOrFindSkill(name);
+
+      if (!skillId) {
+        return;
+      }
+
+      ids.push(skillId);
+    }
+
+    setSelectedSkills((current) => [
+      ...current,
+      ...ids.filter((id) => !current.includes(id)),
+    ]);
+
+    setSkillInput('');
+  }
+
+  async function getFinalSkillIds(): Promise<string[] | null> {
+    const ids = new Set(selectedSkills);
+
+    const typedNames = skillInput
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    for (const name of typedNames) {
+      const skillId = await createOrFindSkill(name);
+
+      if (!skillId) {
+        return null;
+      }
+
+      ids.add(skillId);
+    }
+
+    return [...ids];
+  }
+
+  async function loadJobs() {
+    if (!user) return;
+
+    setLoadingJobs(true);
+
+    const { data, error: jobsError } = await supabase
+      .from('jobs')
+      .select(
+        `
+          id,
+          title,
+          description,
+          location,
+          job_mode,
+          employment_type,
+          salary_min,
+          salary_max,
+          status,
+          created_at
+        `
+      )
+      .eq('recruiter_id', user.id)
+      .order('created_at', {
+        ascending: false,
+      });
+
+    if (jobsError) {
+      setError(jobsError.message);
+      setJobs([]);
+    } else {
+      setJobs((data || []) as RecruiterJob[]);
+    }
+
+    setLoadingJobs(false);
+  }
+
+  async function deleteJob(job: RecruiterJob) {
+    if (!user) return;
+
+    const confirmed = window.confirm(
+      `Delete "${job.title}"? This cannot be undone if the job has no applications.`
+    );
+
+    if (!confirmed) return;
+
+    setError('');
+    setMessage('');
+
+    const { count, error: countError } =
+      await supabase
+        .from('applications')
+        .select('id', {
+          count: 'exact',
+          head: true,
+        })
+        .eq('job_id', job.id);
+
+    if (countError) {
+      setError(countError.message);
+      return;
+    }
+
+    if ((count || 0) > 0) {
+      const closeConfirmed = window.confirm(
+        `This job has ${count} application${
+          count === 1 ? '' : 's'
+        }. It should not be permanently deleted because candidate applications must be preserved.\n\nClose this job instead?`
+      );
+
+      if (!closeConfirmed) return;
+
+      const { error: closeError } =
+        await supabase
+          .from('jobs')
+          .update({
+            status: 'closed',
+          })
+          .eq('id', job.id)
+          .eq('recruiter_id', user.id);
+
+      if (closeError) {
+        setError(closeError.message);
+        return;
+      }
+
+      setMessage(
+        'Job closed successfully. Existing applications were preserved.'
+      );
+
+      await loadJobs();
+      return;
+    }
+
+    const { error: skillDeleteError } =
+      await supabase
+        .from('job_skills')
+        .delete()
+        .eq('job_id', job.id);
+
+    if (skillDeleteError) {
+      setError(skillDeleteError.message);
+      return;
+    }
+
+    const { error: jobDeleteError } =
+      await supabase
+        .from('jobs')
+        .delete()
+        .eq('id', job.id)
+        .eq('recruiter_id', user.id);
+
+    if (jobDeleteError) {
+      setError(jobDeleteError.message);
+      return;
+    }
+
+    setMessage('Job deleted successfully.');
+
+    await loadJobs();
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
 
@@ -289,6 +545,21 @@ export function PostJob() {
     setSaving(true);
     setError('');
     setMessage('');
+
+    const finalSkillIds = await getFinalSkillIds();
+
+    if (!finalSkillIds) {
+      setSaving(false);
+      return;
+    }
+
+    if (finalSkillIds.length === 0) {
+      setError(
+        'Please select or type at least one required skill.'
+      );
+      setSaving(false);
+      return;
+    }
 
     const salaryMin =
       form.salary_min.trim() === ''
@@ -304,7 +575,9 @@ export function PostJob() {
       salaryMin !== null &&
       (!Number.isFinite(salaryMin) || salaryMin < 0)
     ) {
-      setError('Please enter a valid minimum salary.');
+      setError(
+        'Please enter a valid minimum salary.'
+      );
       setSaving(false);
       return;
     }
@@ -313,7 +586,9 @@ export function PostJob() {
       salaryMax !== null &&
       (!Number.isFinite(salaryMax) || salaryMax < 0)
     ) {
-      setError('Please enter a valid maximum salary.');
+      setError(
+        'Please enter a valid maximum salary.'
+      );
       setSaving(false);
       return;
     }
@@ -330,20 +605,16 @@ export function PostJob() {
       return;
     }
 
-    if (selectedSkills.length === 0) {
-      setError('Please select at least one required skill.');
-      setSaving(false);
-      return;
-    }
-
     const recruiterId = user.id;
 
-    const { data: company, error: companyError } =
-      await supabase
-        .from('companies')
-        .select('id')
-        .eq('recruiter_id', recruiterId)
-        .maybeSingle();
+    const {
+      data: company,
+      error: companyError,
+    } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('recruiter_id', recruiterId)
+      .maybeSingle();
 
     if (companyError) {
       setError(companyError.message);
@@ -359,7 +630,10 @@ export function PostJob() {
       return;
     }
 
-    const { data: job, error: jobError } = await supabase
+    const {
+      data: job,
+      error: jobError,
+    } = await supabase
       .from('jobs')
       .insert({
         company_id: company.id,
@@ -378,18 +652,23 @@ export function PostJob() {
 
     if (jobError || !job) {
       setError(
-        jobError?.message || 'Unable to publish the job.'
+        jobError?.message ||
+          'Unable to publish the job.'
       );
       setSaving(false);
       return;
     }
 
-    const skillRows = selectedSkills.map((skillId) => ({
-      job_id: job.id,
-      skill_id: skillId,
-    }));
+    const skillRows = finalSkillIds.map(
+      (skillId) => ({
+        job_id: job.id,
+        skill_id: skillId,
+      })
+    );
 
-    const { error: skillError } = await supabase
+    const {
+      error: skillError,
+    } = await supabase
       .from('job_skills')
       .insert(skillRows);
 
@@ -408,7 +687,9 @@ export function PostJob() {
       return;
     }
 
-    setMessage('Job published successfully.');
+    setMessage(
+      'Job published successfully.'
+    );
 
     setForm({
       title: '',
@@ -421,7 +702,45 @@ export function PostJob() {
     });
 
     setSelectedSkills([]);
+    setSkillInput('');
+
     setSaving(false);
+
+    await loadJobs();
+  }
+
+  function formatSalary(
+    min: number | null,
+    max: number | null
+  ) {
+    if (min !== null && max !== null) {
+      return `₹${min.toLocaleString(
+        'en-IN'
+      )} – ₹${max.toLocaleString('en-IN')}`;
+    }
+
+    if (min !== null) {
+      return `From ₹${min.toLocaleString(
+        'en-IN'
+      )}`;
+    }
+
+    if (max !== null) {
+      return `Up to ₹${max.toLocaleString(
+        'en-IN'
+      )}`;
+    }
+
+    return 'Salary not specified';
+  }
+
+  function getJobModeLabel(
+    mode: string | null
+  ) {
+    if (mode === 'remote') return 'Remote';
+    if (mode === 'onsite') return 'On-site';
+    if (mode === 'hybrid') return 'Hybrid';
+    return 'Not specified';
   }
 
   return (
@@ -436,11 +755,14 @@ export function PostJob() {
 
           <p>
             Tell candidates exactly what the role requires.
-            Candidates will submit a job-specific skill video when
-            they apply.
+            Candidates will submit a job-specific skill video
+            when they apply.
           </p>
 
-          <form className="card form" onSubmit={save}>
+          <form
+            className="card form"
+            onSubmit={save}
+          >
             <label>
               Job title
 
@@ -448,7 +770,10 @@ export function PostJob() {
                 required
                 value={form.title}
                 onChange={(e) =>
-                  updateField('title', e.target.value)
+                  updateField(
+                    'title',
+                    e.target.value
+                  )
                 }
                 placeholder="e.g. Sales Executive"
               />
@@ -462,7 +787,10 @@ export function PostJob() {
                 rows={10}
                 value={form.description}
                 onChange={(e) =>
-                  updateField('description', e.target.value)
+                  updateField(
+                    'description',
+                    e.target.value
+                  )
                 }
                 placeholder="Describe the role, responsibilities and expectations..."
               />
@@ -472,33 +800,124 @@ export function PostJob() {
               <b>Required skills</b>
 
               <p className="muted">
-                Select the skills candidates should demonstrate in
-                their application video.
+                Select existing skills or type your own.
               </p>
 
               {loadingSkills ? (
                 <p>Loading skills...</p>
-              ) : skills.length === 0 ? (
-                <div className="err">
-                  No skills are available. Please add skills in
-                  Supabase first.
-                </div>
               ) : (
-                <div className="skillpills">
-                  {skills.map((skill) => (
-                    <button
-                      key={skill.id}
-                      type="button"
-                      className={
-                        selectedSkills.includes(skill.id)
-                          ? 'sel'
-                          : ''
+                <>
+                  <div className="skillpills">
+                    {skills.map((skill) => (
+                      <button
+                        key={skill.id}
+                        type="button"
+                        className={
+                          selectedSkills.includes(
+                            skill.id
+                          )
+                            ? 'sel'
+                            : ''
+                        }
+                        onClick={() =>
+                          toggleSkill(skill.id)
+                        }
+                      >
+                        {skill.name}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '10px',
+                      marginTop: '14px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <input
+                      type="text"
+                      value={skillInput}
+                      onChange={(e) =>
+                        setSkillInput(
+                          e.target.value
+                        )
                       }
-                      onClick={() => toggleSkill(skill.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addTypedSkills();
+                        }
+                      }}
+                      placeholder="Type skills: React, Excel, Python"
+                      style={{
+                        flex: '1 1 240px',
+                        minWidth: 0,
+                      }}
+                    />
+
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={addTypedSkills}
+                      disabled={
+                        !skillInput.trim()
+                      }
                     >
-                      {skill.name}
+                      Add skills
                     </button>
-                  ))}
+                  </div>
+
+                  <small
+                    style={{
+                      display: 'block',
+                      marginTop: '8px',
+                    }}
+                  >
+                    Enter multiple skills separated by commas.
+                    Press Enter or click Add skills.
+                  </small>
+                </>
+              )}
+
+              {selectedSkills.length > 0 && (
+                <div
+                  style={{
+                    marginTop: '18px',
+                  }}
+                >
+                  <b>Selected skills</b>
+
+                  <div className="skillpills">
+                    {selectedSkills.map(
+                      (skillId) => {
+                        const skill =
+                          skills.find(
+                            (item) =>
+                              item.id ===
+                              skillId
+                          );
+
+                        if (!skill) return null;
+
+                        return (
+                          <button
+                            key={skill.id}
+                            type="button"
+                            className="sel"
+                            onClick={() =>
+                              toggleSkill(
+                                skill.id
+                              )
+                            }
+                          >
+                            {skill.name} ×
+                          </button>
+                        );
+                      }
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -509,7 +928,10 @@ export function PostJob() {
               <input
                 value={form.location}
                 onChange={(e) =>
-                  updateField('location', e.target.value)
+                  updateField(
+                    'location',
+                    e.target.value
+                  )
                 }
                 placeholder="e.g. Delhi, India"
               />
@@ -521,12 +943,21 @@ export function PostJob() {
               <select
                 value={form.job_mode}
                 onChange={(e) =>
-                  updateField('job_mode', e.target.value)
+                  updateField(
+                    'job_mode',
+                    e.target.value
+                  )
                 }
               >
-                <option value="remote">Remote</option>
-                <option value="onsite">On-site</option>
-                <option value="hybrid">Hybrid</option>
+                <option value="remote">
+                  Remote
+                </option>
+                <option value="onsite">
+                  On-site
+                </option>
+                <option value="hybrid">
+                  Hybrid
+                </option>
               </select>
             </label>
 
@@ -534,7 +965,9 @@ export function PostJob() {
               Employment type
 
               <select
-                value={form.employment_type}
+                value={
+                  form.employment_type
+                }
                 onChange={(e) =>
                   updateField(
                     'employment_type',
@@ -542,10 +975,18 @@ export function PostJob() {
                   )
                 }
               >
-                <option>Full-time</option>
-                <option>Part-time</option>
-                <option>Contract</option>
-                <option>Internship</option>
+                <option>
+                  Full-time
+                </option>
+                <option>
+                  Part-time
+                </option>
+                <option>
+                  Contract
+                </option>
+                <option>
+                  Internship
+                </option>
               </select>
             </label>
 
@@ -564,7 +1005,9 @@ export function PostJob() {
                     type="number"
                     min="0"
                     step="1000"
-                    value={form.salary_min}
+                    value={
+                      form.salary_min
+                    }
                     onChange={(e) =>
                       updateField(
                         'salary_min',
@@ -582,7 +1025,9 @@ export function PostJob() {
                     type="number"
                     min="0"
                     step="1000"
-                    value={form.salary_max}
+                    value={
+                      form.salary_max
+                    }
                     onChange={(e) =>
                       updateField(
                         'salary_max',
@@ -599,18 +1044,138 @@ export function PostJob() {
               </small>
             </div>
 
-            {error && <div className="err">{error}</div>}
+            {error && (
+              <div className="err">
+                {error}
+              </div>
+            )}
 
-            {message && <div className="ok">{message}</div>}
+            {message && (
+              <div className="ok">
+                {message}
+              </div>
+            )}
 
             <button
               className="btn full"
               type="submit"
               disabled={saving}
             >
-              {saving ? 'Publishing...' : 'Publish job'}
+              {saving
+                ? 'Publishing...'
+                : 'Publish job'}
             </button>
           </form>
+
+          {/* MY JOBS */}
+          <section
+            style={{
+              marginTop: '50px',
+            }}
+          >
+            <small>YOUR JOBS</small>
+
+            <h2>
+              Posted jobs
+            </h2>
+
+            {loadingJobs ? (
+              <div className="empty">
+                Loading your jobs...
+              </div>
+            ) : !jobs.length ? (
+              <div className="empty">
+                You have not posted any jobs yet.
+              </div>
+            ) : (
+              <div className="list">
+                {jobs.map((job) => (
+                  <article
+                    className="card"
+                    key={job.id}
+                    style={{
+                      marginBottom: '14px',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent:
+                          'space-between',
+                        gap: '15px',
+                        alignItems:
+                          'flex-start',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div
+                        style={{
+                          flex: '1 1 300px',
+                        }}
+                      >
+                        <small>
+                          {job.status ===
+                          'open'
+                            ? 'OPEN'
+                            : 'CLOSED'}
+                        </small>
+
+                        <h3
+                          style={{
+                            margin:
+                              '8px 0',
+                          }}
+                        >
+                          {job.title}
+                        </h3>
+
+                        <p>
+                          {job.location ||
+                            'Remote'}{' '}
+                          ·{' '}
+                          {getJobModeLabel(
+                            job.job_mode
+                          )}{' '}
+                          ·{' '}
+                          {job.employment_type ||
+                            'Full-time'}
+                        </p>
+
+                        <p>
+                          {formatSalary(
+                            job.salary_min,
+                            job.salary_max
+                          )}
+                        </p>
+
+                        {job.created_at && (
+                          <small>
+                            Posted{' '}
+                            {new Date(
+                              job.created_at
+                            ).toLocaleDateString()}
+                          </small>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn danger"
+                        onClick={() =>
+                          deleteJob(job)
+                        }
+                      >
+                        {job.status ===
+                        'open'
+                          ? 'Delete / Close'
+                          : 'Delete job'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </main>
 
@@ -622,9 +1187,14 @@ export function PostJob() {
 export function RecruiterApplications() {
   const { user } = useAuth();
 
-  const [applications, setApplications] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [applications, setApplications] =
+    useState<any[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState('');
 
   async function loadApplications() {
     if (!user) {
@@ -637,29 +1207,36 @@ export function RecruiterApplications() {
     setLoading(true);
     setError('');
 
-    const { data, error: applicationError } =
-      await supabase
-        .from('applications')
-        .select(`
+    const {
+      data,
+      error: applicationError,
+    } = await supabase
+      .from('applications')
+      .select(`
+        id,
+        candidate_id,
+        job_id,
+        status,
+        video_url,
+        created_at,
+        jobs!inner(
           id,
-          candidate_id,
-          job_id,
-          status,
-          video_url,
-          created_at,
-          jobs!inner(
-            id,
-            title,
-            recruiter_id
-          )
-        `)
-        .eq('jobs.recruiter_id', recruiterId)
-        .order('created_at', {
-          ascending: false,
-        });
+          title,
+          recruiter_id
+        )
+      `)
+      .eq(
+        'jobs.recruiter_id',
+        recruiterId
+      )
+      .order('created_at', {
+        ascending: false,
+      });
 
     if (applicationError) {
-      setError(applicationError.message);
+      setError(
+        applicationError.message
+      );
       setApplications([]);
       setLoading(false);
       return;
@@ -676,85 +1253,119 @@ export function RecruiterApplications() {
     const candidateIds = [
       ...new Set(
         rows
-          .map((item: any) => item.candidate_id)
+          .map(
+            (item: any) =>
+              item.candidate_id
+          )
           .filter(Boolean)
       ),
     ];
 
-    const { data: profiles, error: profileError } =
-      await supabase
-        .from('profiles')
-        .select(`
-          id,
-          full_name,
-          email,
-          phone,
-          country_code,
-          address,
-          state,
-          country,
-          location,
-          headline,
-          bio
-        `)
-        .in('id', candidateIds);
+    const {
+      data: profiles,
+      error: profileError,
+    } = await supabase
+      .from('profiles')
+      .select(`
+        id,
+        full_name,
+        email,
+        phone,
+        country_code,
+        address,
+        state,
+        country,
+        location,
+        headline,
+        bio
+      `)
+      .in('id', candidateIds);
 
     if (profileError) {
-      setError(profileError.message);
+      setError(
+        profileError.message
+      );
       setLoading(false);
       return;
     }
 
-    const { data: candidateSkills, error: skillsError } =
-      await supabase
-        .from('candidate_skills')
-        .select(`
-          candidate_id,
-          skill_id,
-          skills(
-            id,
-            name
-          )
-        `)
-        .in('candidate_id', candidateIds);
+    const {
+      data: candidateSkills,
+      error: skillsError,
+    } = await supabase
+      .from('candidate_skills')
+      .select(`
+        candidate_id,
+        skill_id,
+        skills(
+          id,
+          name
+        )
+      `)
+      .in(
+        'candidate_id',
+        candidateIds
+      );
 
     if (skillsError) {
-      setError(skillsError.message);
+      setError(
+        skillsError.message
+      );
       setLoading(false);
       return;
     }
 
     const profileMap = new Map(
-      (profiles || []).map((profile: any) => [
-        profile.id,
-        profile,
-      ])
+      (profiles || []).map(
+        (profile: any) => [
+          profile.id,
+          profile,
+        ]
+      )
     );
 
-    const skillMap = new Map<string, any[]>();
+    const skillMap =
+      new Map<string, any[]>();
 
-    (candidateSkills || []).forEach((row: any) => {
-      const existing =
-        skillMap.get(row.candidate_id) || [];
+    (candidateSkills || []).forEach(
+      (row: any) => {
+        const existing =
+          skillMap.get(
+            row.candidate_id
+          ) || [];
 
-      if (row.skills) {
-        existing.push(row.skills);
+        if (row.skills) {
+          existing.push(
+            row.skills
+          );
+        }
+
+        skillMap.set(
+          row.candidate_id,
+          existing
+        );
       }
-
-      skillMap.set(row.candidate_id, existing);
-    });
-
-    const finalApplications = rows.map(
-      (application: any) => ({
-        ...application,
-        profile:
-          profileMap.get(application.candidate_id) || null,
-        skills:
-          skillMap.get(application.candidate_id) || [],
-      })
     );
 
-    setApplications(finalApplications);
+    const finalApplications =
+      rows.map(
+        (application: any) => ({
+          ...application,
+          profile:
+            profileMap.get(
+              application.candidate_id
+            ) || null,
+          skills:
+            skillMap.get(
+              application.candidate_id
+            ) || [],
+        })
+      );
+
+    setApplications(
+      finalApplications
+    );
+
     setLoading(false);
   }
 
@@ -766,33 +1377,47 @@ export function RecruiterApplications() {
     applicationId: string,
     status: string
   ) {
-    const { error: updateError } =
-      await supabase
-        .from('applications')
-        .update({
-          status,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', applicationId);
+    setError('');
+
+    const {
+      error: updateError,
+    } = await supabase
+      .from('applications')
+      .update({
+        status,
+        updated_at:
+          new Date().toISOString(),
+      })
+      .eq(
+        'id',
+        applicationId
+      );
 
     if (updateError) {
-      setError(updateError.message);
+      setError(
+        updateError.message
+      );
       return;
     }
 
-    setApplications((current) =>
-      current.map((application) =>
-        application.id === applicationId
-          ? {
-              ...application,
-              status,
-            }
-          : application
-      )
+    setApplications(
+      (current) =>
+        current.map(
+          (application) =>
+            application.id ===
+            applicationId
+              ? {
+                  ...application,
+                  status,
+                }
+              : application
+        )
     );
   }
 
-  function formatPhone(profile: any) {
+  function formatPhone(
+    profile: any
+  ) {
     if (!profile?.phone) {
       return 'Not provided';
     }
@@ -800,6 +1425,30 @@ export function RecruiterApplications() {
     return `${profile.country_code || ''} ${
       profile.phone
     }`.trim();
+  }
+
+  function statusLabel(
+    status: string
+  ) {
+    switch (status) {
+      case 'reviewed':
+        return 'Reviewed';
+
+      case 'shortlisted':
+        return 'Shortlisted';
+
+      case 'interview':
+        return 'Interview';
+
+      case 'selected':
+        return 'Selected';
+
+      case 'rejected':
+        return 'Rejected';
+
+      default:
+        return 'Applied';
+    }
   }
 
   return (
@@ -817,7 +1466,11 @@ export function RecruiterApplications() {
             hiring actions.
           </p>
 
-          {error && <div className="err">{error}</div>}
+          {error && (
+            <div className="err">
+              {error}
+            </div>
+          )}
 
           {loading ? (
             <div className="empty">
@@ -837,15 +1490,21 @@ export function RecruiterApplications() {
                   return (
                     <article
                       className="card"
-                      key={application.id}
+                      key={
+                        application.id
+                      }
                       style={{
-                        marginBottom: '20px',
+                        marginBottom:
+                          '20px',
                       }}
                     >
-                      <small>APPLIED FOR</small>
+                      <small>
+                        APPLIED FOR
+                      </small>
 
                       <h2>
-                        {application.jobs?.title ||
+                        {application.jobs
+                          ?.title ||
                           'Job'}
                       </h2>
 
@@ -860,63 +1519,87 @@ export function RecruiterApplications() {
 
                       <hr />
 
-                      <small>CANDIDATE</small>
+                      <small>
+                        CANDIDATE
+                      </small>
 
                       <h2>
-                        {candidate?.full_name ||
+                        {candidate
+                          ?.full_name ||
                           'Candidate'}
                       </h2>
 
                       {candidate?.headline && (
                         <p>
                           <strong>
-                            {candidate.headline}
+                            {
+                              candidate.headline
+                            }
                           </strong>
                         </p>
                       )}
 
                       <p>
-                        <strong>Email:</strong>{' '}
+                        <strong>
+                          Email:
+                        </strong>{' '}
                         {candidate?.email ||
                           'Not provided'}
                       </p>
 
                       <p>
-                        <strong>Phone:</strong>{' '}
-                        {formatPhone(candidate)}
+                        <strong>
+                          Phone:
+                        </strong>{' '}
+                        {formatPhone(
+                          candidate
+                        )}
                       </p>
 
                       <p>
-                        <strong>Address:</strong>{' '}
+                        <strong>
+                          Address:
+                        </strong>{' '}
                         {candidate?.address ||
                           'Not provided'}
                       </p>
 
                       <p>
-                        <strong>State:</strong>{' '}
+                        <strong>
+                          State:
+                        </strong>{' '}
                         {candidate?.state ||
                           'Not provided'}
                       </p>
 
                       <p>
-                        <strong>Country:</strong>{' '}
+                        <strong>
+                          Country:
+                        </strong>{' '}
                         {candidate?.country ||
                           'Not provided'}
                       </p>
 
                       <hr />
 
-                      <small>SKILLS</small>
+                      <small>
+                        SKILLS
+                      </small>
 
-                      {application.skills?.length ? (
+                      {application.skills
+                        ?.length ? (
                         <div className="skillpills">
                           {application.skills.map(
                             (skill: any) => (
                               <span
                                 className="sel"
-                                key={skill.id}
+                                key={
+                                  skill.id
+                                }
                               >
-                                {skill.name}
+                                {
+                                  skill.name
+                                }
                               </span>
                             )
                           )}
@@ -936,7 +1619,8 @@ export function RecruiterApplications() {
                       {application.video_url ? (
                         <div
                           style={{
-                            marginTop: '10px',
+                            marginTop:
+                              '10px',
                           }}
                         >
                           <a
@@ -953,8 +1637,8 @@ export function RecruiterApplications() {
                           <p>
                             Watch the candidate's
                             job-specific skill
-                            demonstration before making
-                            a decision.
+                            demonstration before
+                            making a decision.
                           </p>
                         </div>
                       ) : (
@@ -977,7 +1661,9 @@ export function RecruiterApplications() {
                             application.status ||
                             'applied'
                           }
-                          onChange={(e) =>
+                          onChange={(
+                            e
+                          ) =>
                             updateStatus(
                               application.id,
                               e.target.value
@@ -1013,8 +1699,10 @@ export function RecruiterApplications() {
                       <p>
                         Current status:{' '}
                         <strong>
-                          {application.status ||
-                            'applied'}
+                          {statusLabel(
+                            application.status ||
+                              'applied'
+                          )}
                         </strong>
                       </p>
                     </article>
@@ -1029,4 +1717,4 @@ export function RecruiterApplications() {
       <Footer />
     </>
   );
-}git status
+}
