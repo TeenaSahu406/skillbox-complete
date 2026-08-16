@@ -31,11 +31,13 @@ export function Company() {
       return;
     }
 
+    const userId = user.id;
+
     async function loadCompany() {
       const { data, error: loadError } = await supabase
         .from('companies')
         .select('*')
-        .eq('recruiter_id', user!.id)
+        .eq('recruiter_id', userId)
         .maybeSingle();
 
       if (loadError) {
@@ -71,10 +73,7 @@ export function Company() {
   async function save(e: FormEvent) {
     e.preventDefault();
 
-    if (!user) {
-      setError('Please sign in as a recruiter.');
-      return;
-    }
+    if (!user) return;
 
     setSaving(true);
     setMessage('');
@@ -138,6 +137,7 @@ export function Company() {
           <form className="card form" onSubmit={save}>
             <label>
               Company name
+
               <input
                 required
                 value={form.company_name}
@@ -151,6 +151,7 @@ export function Company() {
             <div className="two">
               <label>
                 Industry
+
                 <input
                   value={form.industry}
                   onChange={(e) =>
@@ -162,6 +163,7 @@ export function Company() {
 
               <label>
                 Location
+
                 <input
                   value={form.location}
                   onChange={(e) =>
@@ -174,6 +176,7 @@ export function Company() {
 
             <label>
               Website
+
               <input
                 type="url"
                 value={form.website}
@@ -186,6 +189,7 @@ export function Company() {
 
             <label>
               Company description
+
               <textarea
                 rows={7}
                 value={form.description}
@@ -226,11 +230,10 @@ export function PostJob() {
     title: '',
     description: '',
     location: '',
-    job_mode: 'remote' as 'remote' | 'onsite' | 'hybrid',
+    job_mode: 'remote',
     employment_type: 'Full-time',
     salary_min: '',
     salary_max: '',
-    salary_period: 'monthly',
   });
 
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -333,11 +336,13 @@ export function PostJob() {
       return;
     }
 
+    const recruiterId = user.id;
+
     const { data: company, error: companyError } =
       await supabase
         .from('companies')
         .select('id')
-        .eq('recruiter_id', user.id)
+        .eq('recruiter_id', recruiterId)
         .maybeSingle();
 
     if (companyError) {
@@ -358,7 +363,7 @@ export function PostJob() {
       .from('jobs')
       .insert({
         company_id: company.id,
-        recruiter_id: user.id,
+        recruiter_id: recruiterId,
         title: form.title.trim(),
         description: form.description.trim(),
         location: form.location.trim() || null,
@@ -393,7 +398,7 @@ export function PostJob() {
         .from('jobs')
         .delete()
         .eq('id', job.id)
-        .eq('recruiter_id', user.id);
+        .eq('recruiter_id', recruiterId);
 
       setError(
         `Job was not published because required skills could not be saved: ${skillError.message}`
@@ -413,7 +418,6 @@ export function PostJob() {
       employment_type: 'Full-time',
       salary_min: '',
       salary_max: '',
-      salary_period: 'monthly',
     });
 
     setSelectedSkills([]);
@@ -431,13 +435,15 @@ export function PostJob() {
           <h1>Post a job</h1>
 
           <p>
-            Candidates will submit a job-specific skill video link
-            when they apply.
+            Tell candidates exactly what the role requires.
+            Candidates will submit a job-specific skill video when
+            they apply.
           </p>
 
           <form className="card form" onSubmit={save}>
             <label>
               Job title
+
               <input
                 required
                 value={form.title}
@@ -450,6 +456,7 @@ export function PostJob() {
 
             <label>
               Job description
+
               <textarea
                 required
                 rows={10}
@@ -464,7 +471,7 @@ export function PostJob() {
             <div>
               <b>Required skills</b>
 
-              <p>
+              <p className="muted">
                 Select the skills candidates should demonstrate in
                 their application video.
               </p>
@@ -473,7 +480,8 @@ export function PostJob() {
                 <p>Loading skills...</p>
               ) : skills.length === 0 ? (
                 <div className="err">
-                  No skills available. Please add skills in Supabase.
+                  No skills are available. Please add skills in
+                  Supabase first.
                 </div>
               ) : (
                 <div className="skillpills">
@@ -497,6 +505,7 @@ export function PostJob() {
 
             <label>
               Job location
+
               <input
                 value={form.location}
                 onChange={(e) =>
@@ -508,6 +517,7 @@ export function PostJob() {
 
             <label>
               Job mode
+
               <select
                 value={form.job_mode}
                 onChange={(e) =>
@@ -522,6 +532,7 @@ export function PostJob() {
 
             <label>
               Employment type
+
               <select
                 value={form.employment_type}
                 onChange={(e) =>
@@ -541,13 +552,14 @@ export function PostJob() {
             <div>
               <b>Salary range</b>
 
-              <p>
-                Salary is shown in Indian Rupees (₹).
+              <p className="muted">
+                Salary will be entered in Indian Rupees (₹).
               </p>
 
               <div className="two">
                 <label>
                   Minimum salary
+
                   <input
                     type="number"
                     min="0"
@@ -565,6 +577,7 @@ export function PostJob() {
 
                 <label>
                   Maximum salary
+
                   <input
                     type="number"
                     min="0"
@@ -581,24 +594,8 @@ export function PostJob() {
                 </label>
               </div>
 
-              <label>
-                Salary period
-                <select
-                  value={form.salary_period}
-                  onChange={(e) =>
-                    updateField(
-                      'salary_period',
-                      e.target.value
-                    )
-                  }
-                >
-                  <option value="monthly">Per month</option>
-                  <option value="annual">Per year</option>
-                </select>
-              </label>
-
               <small>
-                Example: ₹20,000 – ₹35,000 per month.
+                Example: ₹20,000 – ₹35,000
               </small>
             </div>
 
@@ -635,6 +632,8 @@ export function RecruiterApplications() {
       return;
     }
 
+    const recruiterId = user.id;
+
     setLoading(true);
     setError('');
 
@@ -647,7 +646,6 @@ export function RecruiterApplications() {
           job_id,
           status,
           video_url,
-          cover_letter,
           created_at,
           jobs!inner(
             id,
@@ -655,7 +653,7 @@ export function RecruiterApplications() {
             recruiter_id
           )
         `)
-        .eq('jobs.recruiter_id', user.id)
+        .eq('jobs.recruiter_id', recruiterId)
         .order('created_at', {
           ascending: false,
         });
@@ -697,8 +695,7 @@ export function RecruiterApplications() {
           country,
           location,
           headline,
-          bio,
-          intro_video_url
+          bio
         `)
         .in('id', candidateIds);
 
@@ -795,14 +792,6 @@ export function RecruiterApplications() {
     );
   }
 
-  function getVideoUrl(application: any) {
-    return (
-      application.video_url ||
-      application.profile?.intro_video_url ||
-      ''
-    );
-  }
-
   function formatPhone(profile: any) {
     if (!profile?.phone) {
       return 'Not provided';
@@ -824,8 +813,8 @@ export function RecruiterApplications() {
           <h1>Applications</h1>
 
           <p>
-            Review candidates, check their skills and watch
-            their application video before taking action.
+            Review candidates, watch their skill proof and take
+            hiring actions.
           </p>
 
           {error && <div className="err">{error}</div>}
@@ -844,9 +833,6 @@ export function RecruiterApplications() {
                 (application: any) => {
                   const candidate =
                     application.profile;
-
-                  const videoUrl =
-                    getVideoUrl(application);
 
                   return (
                     <article
@@ -918,26 +904,6 @@ export function RecruiterApplications() {
                           'Not provided'}
                       </p>
 
-                      <p>
-                        <strong>Location:</strong>{' '}
-                        {candidate?.location ||
-                          'Not provided'}
-                      </p>
-
-                      {candidate?.bio && (
-                        <>
-                          <hr />
-
-                          <small>
-                            ABOUT CANDIDATE
-                          </small>
-
-                          <p className="prose">
-                            {candidate.bio}
-                          </p>
-                        </>
-                      )}
-
                       <hr />
 
                       <small>SKILLS</small>
@@ -967,7 +933,7 @@ export function RecruiterApplications() {
                         APPLICATION SKILL VIDEO
                       </small>
 
-                      {videoUrl ? (
+                      {application.video_url ? (
                         <div
                           style={{
                             marginTop: '10px',
@@ -975,7 +941,9 @@ export function RecruiterApplications() {
                         >
                           <a
                             className="btn"
-                            href={videoUrl}
+                            href={
+                              application.video_url
+                            }
                             target="_blank"
                             rel="noreferrer"
                           >
@@ -985,29 +953,14 @@ export function RecruiterApplications() {
                           <p>
                             Watch the candidate's
                             job-specific skill
-                            demonstration.
+                            demonstration before making
+                            a decision.
                           </p>
                         </div>
                       ) : (
                         <div className="err">
-                          Candidate has not submitted
-                          a video link for this
-                          application.
+                          No skill video was submitted.
                         </div>
-                      )}
-
-                      {application.cover_letter && (
-                        <>
-                          <hr />
-
-                          <small>
-                            CANDIDATE NOTE
-                          </small>
-
-                          <p className="prose">
-                            {application.cover_letter}
-                          </p>
-                        </>
                       )}
 
                       <hr />
@@ -1016,53 +969,46 @@ export function RecruiterApplications() {
                         RECRUITER ACTION
                       </small>
 
-                      <div
-                        className="two"
-                        style={{
-                          marginTop: '10px',
-                        }}
-                      >
-                        <label>
-                          Application status
+                      <label>
+                        Application status
 
-                          <select
-                            value={
-                              application.status ||
-                              'applied'
-                            }
-                            onChange={(e) =>
-                              updateStatus(
-                                application.id,
-                                e.target.value
-                              )
-                            }
-                          >
-                            <option value="applied">
-                              Applied
-                            </option>
+                        <select
+                          value={
+                            application.status ||
+                            'applied'
+                          }
+                          onChange={(e) =>
+                            updateStatus(
+                              application.id,
+                              e.target.value
+                            )
+                          }
+                        >
+                          <option value="applied">
+                            Applied
+                          </option>
 
-                            <option value="reviewed">
-                              Reviewed
-                            </option>
+                          <option value="reviewed">
+                            Reviewed
+                          </option>
 
-                            <option value="shortlisted">
-                              Shortlisted
-                            </option>
+                          <option value="shortlisted">
+                            Shortlisted
+                          </option>
 
-                            <option value="interview">
-                              Interview
-                            </option>
+                          <option value="interview">
+                            Interview
+                          </option>
 
-                            <option value="selected">
-                              Selected
-                            </option>
+                          <option value="selected">
+                            Selected
+                          </option>
 
-                            <option value="rejected">
-                              Rejected
-                            </option>
-                          </select>
-                        </label>
-                      </div>
+                          <option value="rejected">
+                            Rejected
+                          </option>
+                        </select>
+                      </label>
 
                       <p>
                         Current status:{' '}
@@ -1083,4 +1029,4 @@ export function RecruiterApplications() {
       <Footer />
     </>
   );
-}
+}git status
