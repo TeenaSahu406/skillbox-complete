@@ -1,0 +1,2 @@
+import {Navigate,Outlet} from 'react-router-dom';import {useAuth} from '../hooks/useAuth';import type {Role} from '../types/db';
+export default function Protected({role}:{role?:Role}){const{user,profile,loading}=useAuth();if(loading)return <div className="loader">Loading…</div>;if(!user)return <Navigate to="/login" replace/>;if(role&&profile?.role!==role)return <Navigate to="/" replace/>;return <Outlet/>}
