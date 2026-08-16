@@ -11,6 +11,14 @@ type Skill = {
   name: string;
 };
 
+type ApplicationStatus =
+  | 'applied'
+  | 'reviewed'
+  | 'shortlisted'
+  | 'interview'
+  | 'selected'
+  | 'rejected';
+
 export default function Jobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [q, setQ] = useState('');
@@ -40,9 +48,15 @@ export default function Jobs() {
       );
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
 
-    setJobs((data as Job[]) || []);
+    if (error) {
+      console.error('Failed to load jobs:', error);
+      setJobs([]);
+    } else {
+      setJobs((data as Job[]) || []);
+    }
+
     setLoading(false);
   }
 
@@ -196,17 +210,24 @@ export function JobDetails() {
   const [alreadyApplied, setAlreadyApplied] =
     useState(false);
 
+  const [applicationStatus, setApplicationStatus] =
+    useState<ApplicationStatus | null>(null);
+
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
   async function loadJob() {
     if (!id) return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('jobs')
       .select('*,companies(*)')
       .eq('id', id)
       .maybeSingle();
+
+    if (error) {
+      console.error('Failed to load job:', error);
+    }
 
     if (data) {
       setJob(data as Job);
@@ -218,10 +239,15 @@ export function JobDetails() {
   async function loadSkills() {
     if (!id) return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('job_skills')
       .select('skill_id,skills(id,name)')
       .eq('job_id', id);
+
+    if (error) {
+      console.error('Failed to load job skills:', error);
+      return;
+    }
 
     const result = (data || [])
       .map((row: any) => row.skills)
@@ -233,17 +259,38 @@ export function JobDetails() {
   async function checkApplication() {
     if (!id || !user) {
       setAlreadyApplied(false);
+      setApplicationStatus(null);
       return;
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('applications')
-      .select('id')
+      .select('id,status')
       .eq('job_id', id)
       .eq('candidate_id', user.id)
       .maybeSingle();
 
-    setAlreadyApplied(Boolean(data));
+    if (error) {
+      console.error(
+        'Failed to check application:',
+        error
+      );
+
+      setAlreadyApplied(false);
+      setApplicationStatus(null);
+      return;
+    }
+
+    if (data) {
+      setAlreadyApplied(true);
+
+      setApplicationStatus(
+        (data.status || 'applied') as ApplicationStatus
+      );
+    } else {
+      setAlreadyApplied(false);
+      setApplicationStatus(null);
+    }
   }
 
   useEffect(() => {
@@ -254,6 +301,29 @@ export function JobDetails() {
   useEffect(() => {
     checkApplication();
   }, [id, user]);
+
+  /*
+   * Refresh application status every 10 seconds while
+   * candidate is viewing this job.
+   *
+   * This means if recruiter changes:
+   * Applied -> Reviewed
+   * or Reviewed -> Shortlisted
+   * etc., the candidate page will pick it up automatically.
+   */
+  useEffect(() => {
+    if (!id || !user || profile?.role !== 'candidate') {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      checkApplication();
+    }, 10000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [id, user, profile?.role]);
 
   async function apply(e: FormEvent) {
     e.preventDefault();
@@ -301,14 +371,16 @@ export function JobDetails() {
 
     setApplying(true);
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('applications')
       .insert({
         job_id: id,
         candidate_id: user.id,
         video_url: cleanVideoUrl,
         status: 'applied',
-      });
+      })
+      .select('id,status')
+      .single();
 
     setApplying(false);
 
@@ -319,11 +391,111 @@ export function JobDetails() {
 
     setAlreadyApplied(true);
 
+    setApplicationStatus(
+      (data?.status || 'applied') as ApplicationStatus
+    );
+
     setMsg(
       'Application submitted successfully. The recruiter can now review your profile and skill video.'
     );
 
     setVideoUrl('');
+  }
+
+  function getStatusLabel(
+    status: ApplicationStatus | null
+  ) {
+    switch (status) {
+      case 'applied':
+        return 'Applied';
+
+      case 'reviewed':
+        return 'Reviewed';
+
+      case 'shortlisted':
+        return 'Shortlisted';
+
+      case 'interview':
+        return 'Interview';
+
+      case 'selected':
+        return 'Selected';
+
+      case 'rejected':
+        return 'Rejected';
+
+      default:
+        return 'Application submitted';
+    }
+  }
+
+  function getStatusMessage(
+    status: ApplicationStatus | null
+  ) {
+    switch (status) {
+      case 'applied':
+        return 'Your application has been submitted and is waiting for recruiter review.';
+
+      case 'reviewed':
+        return 'The recruiter has reviewed your application.';
+
+      case 'shortlisted':
+        return 'Good news! The recruiter has shortlisted your application.';
+
+      case 'interview':
+        return 'Your application has moved to the interview stage.';
+
+      case 'selected':
+        return 'Congratulations! Your application has been selected.';
+
+      case 'rejected':
+        return 'The recruiter has decided not to move forward with this application.';
+
+      default:
+        return 'Your application has been submitted.';
+    }
+  }
+
+  function getStatusStyle(
+    status: ApplicationStatus | null
+  ): React.CSSProperties {
+    if (status === 'selected') {
+      return {
+        background: '#f0fdf4',
+        border: '1px solid #bbf7d0',
+        color: '#166534',
+      };
+    }
+
+    if (status === 'rejected') {
+      return {
+        background: '#fef2f2',
+        border: '1px solid #fecaca',
+        color: '#991b1b',
+      };
+    }
+
+    if (status === 'shortlisted') {
+      return {
+        background: '#eff6ff',
+        border: '1px solid #93c5fd',
+        color: '#1d4ed8',
+      };
+    }
+
+    if (status === 'interview') {
+      return {
+        background: '#f5f3ff',
+        border: '1px solid #ddd6fe',
+        color: '#6d28d9',
+      };
+    }
+
+    return {
+      background: '#f8fafc',
+      border: '1px solid #cbd5e1',
+      color: '#334155',
+    };
   }
 
   if (loading) {
@@ -456,7 +628,7 @@ export function JobDetails() {
             </article>
 
             <aside>
-              <h3>Apply for this role</h3>
+              <h3>Application</h3>
 
               {!user ? (
                 <>
@@ -478,10 +650,60 @@ export function JobDetails() {
                   for jobs.
                 </div>
               ) : alreadyApplied ? (
-                <div className="ok">
-                  You have already applied for
-                  this job.
-                </div>
+                <>
+                  <div
+                    style={{
+                      ...getStatusStyle(
+                        applicationStatus
+                      ),
+                      borderRadius: '10px',
+                      padding: '16px',
+                    }}
+                  >
+                    <small
+                      style={{
+                        display: 'block',
+                        fontWeight: 800,
+                        letterSpacing: '0.08em',
+                        marginBottom: '6px',
+                      }}
+                    >
+                      APPLICATION STATUS
+                    </small>
+
+                    <strong
+                      style={{
+                        display: 'block',
+                        fontSize: '20px',
+                        marginBottom: '7px',
+                      }}
+                    >
+                      {getStatusLabel(
+                        applicationStatus
+                      )}
+                    </strong>
+
+                    <p
+                      style={{
+                        margin: 0,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {getStatusMessage(
+                        applicationStatus
+                      )}
+                    </p>
+                  </div>
+
+                  {msg && (
+                    <div
+                      className="ok"
+                      style={{ marginTop: '12px' }}
+                    >
+                      {msg}
+                    </div>
+                  )}
+                </>
               ) : (
                 <form
                   className="form"
